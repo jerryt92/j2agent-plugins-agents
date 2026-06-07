@@ -1,6 +1,8 @@
 package io.github.jerryt92.j2agent.example;
 
 import io.github.jerryt92.j2agent.service.llm.agent.inf.AiAgent;
+import io.github.jerryt92.j2agent.tools.MathTool;
+import io.github.jerryt92.j2agent.tools.WebTool;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
@@ -12,6 +14,14 @@ import java.nio.charset.StandardCharsets;
  */
 @Component
 public class ExampleAgent extends AiAgent {
+
+    private final MathTool mathTool;
+    private final WebTool webTool;
+
+    public ExampleAgent(MathTool mathTool, WebTool webTool) {
+        this.mathTool = mathTool;
+        this.webTool = webTool;
+    }
 
     @Override
     public String getAgentId() {
@@ -31,6 +41,11 @@ public class ExampleAgent extends AiAgent {
     @Override
     public boolean isQaTemplateEnabled() {
         return true;
+    }
+
+    @Override
+    protected Object[] buildTools() {
+        return new Object[]{mathTool, webTool};
     }
 
     @Override
