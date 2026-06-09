@@ -24,6 +24,11 @@ public class ExampleAgent extends AiAgent {
     }
 
     @Override
+    public int getSort() {
+        return 1;
+    }
+
+    @Override
     public String getAgentId() {
         return "example_agent";
     }

@@ -48,7 +48,12 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
 
     @Override
     public int getSort() {
-        return 1;
+        return 2;
+    }
+
+    @Override
+    public String getLogo() {
+        return "💬";
     }
 
     @Override
@@ -111,4 +116,6 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
                 .allowEmptyContext(true)
                 .build();
     }
+
+
 }

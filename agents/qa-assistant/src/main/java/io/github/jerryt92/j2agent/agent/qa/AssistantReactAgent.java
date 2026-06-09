@@ -41,7 +41,12 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills, McpF
 
     @Override
     public int getSort() {
-        return 1;
+        return 3;
+    }
+
+    @Override
+    public String getLogo() {
+        return "💬";
     }
 
     @Override
