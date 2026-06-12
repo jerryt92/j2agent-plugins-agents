@@ -88,6 +88,10 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
         return j2AgentDocsRetriever;
     }
 
+    @Override
+    public boolean isRagSourceDisplayEnabled() {
+        return true;
+    }
 
     /**
      * 每次调用 grep_knowledge_repo 并阅读结果，grep 有相关内容则据此作答（不省略不总结不无脑照搬），无相关内容则用 RAG 上下文作答。
