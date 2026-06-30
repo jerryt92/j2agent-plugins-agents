@@ -47,7 +47,7 @@ public class ExampleAgent extends AiAgent {
     public String getDispatchPrompt() {
         return """
                 插件接入验证用 Agent，无真实业务能力。
-                调度提示词写法：能力域 + 典型用户问法示例，帮助 query_intent_agents 开放召回；无需写死互斥判决。""";
+                调度提示词写法：能力域 + 典型用户问法示例，帮助被动意图召回开放召回；无需写死互斥判决。""";
     }
 
     @Override
