@@ -229,7 +229,7 @@ public class KnowledgeRepoGrepTools {
             return walk.filter(Files::isRegularFile)
                     .filter(path -> {
                         String fileName = path.getFileName().toString();
-                        return fileName.endsWith(MD_SUFFIX) && !"info.json".equals(fileName);
+                        return fileName.endsWith(MD_SUFFIX);
                     })
                     .sorted(Comparator.comparing(path -> searchRoot.relativize(path).toString()))
                     .toList();

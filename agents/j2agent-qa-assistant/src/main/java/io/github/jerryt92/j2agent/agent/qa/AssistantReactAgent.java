@@ -100,7 +100,7 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
         this.j2AgentDocsRetriever = j2AgentDocsRetriever;
         this.webTool = webTool;
         /**
-         * 相对 com.nms.ai.knowledge.repo.root-path 的 Wiki 子目录，与部署目录 wiki/info.json 一致。
+         * 相对知识库根目录的 Wiki 子目录，需与平台知识库列表中的仓库目录一致。
          */
         this.knowledgeRepoGrepTools = new KnowledgeRepoGrepTools(
                 knowledgeRepoMetadataService, "j2agent-docs", knowledgeMarkdownImageRewriter);
