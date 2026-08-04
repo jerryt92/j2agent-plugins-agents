@@ -104,6 +104,7 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
          */
         this.knowledgeRepoGrepTools = new KnowledgeRepoGrepTools(
                 knowledgeRepoMetadataService, "j2agent-docs", knowledgeMarkdownImageRewriter);
+        this.knowledgeRepoGrepTools.setPublishMatchedFilesAsSources(true);
     }
 
     @Override
