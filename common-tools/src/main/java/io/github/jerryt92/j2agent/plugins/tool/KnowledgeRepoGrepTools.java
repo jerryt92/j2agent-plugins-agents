@@ -1,9 +1,14 @@
 package io.github.jerryt92.j2agent.plugins.tool;
 
+import io.github.jerryt92.j2agent.service.llm.agent.builtin.AgentToolContextSupport;
+import io.github.jerryt92.j2agent.service.llm.agent.core.AgentRunnableContextKeys;
+import io.github.jerryt92.j2agent.service.rag.RagSourcePublicationService;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeMarkdownImageRewriter;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeRepoMetadataService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
@@ -16,6 +21,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -38,6 +44,7 @@ public class KnowledgeRepoGrepTools {
     private final KnowledgeRepoMetadataService metadataService;
     private final String kbRelativeSubPath;
     private final KnowledgeMarkdownImageRewriter imageRewriter;
+    private boolean publishMatchedFilesAsSources;
 
     /**
      * @param metadataService   平台知识库元数据服务（提供 repo 根路径）
@@ -58,12 +65,31 @@ public class KnowledgeRepoGrepTools {
     }
 
     /**
+     * 控制 grep 命中的 Markdown 文件是否进入聊天来源列表；默认关闭以保持旧插件行为。
+     */
+    public KnowledgeRepoGrepTools setPublishMatchedFilesAsSources(boolean enabled) {
+        this.publishMatchedFilesAsSources = enabled;
+        return this;
+    }
+
+    /**
+     * 在绑定的知识库子目录内对 Markdown 做正文行级与文件名检索；主 pattern 无命中时自动拆词回退。
+     */
+    public String grepKnowledgeRepo(
+            @ToolParam(description = "检索关键词或短语，对 .md 文件正文行与文件名做包含匹配（忽略大小写）") String pattern,
+            @ToolParam(description = "可选，在已配置的知识库子目录下再收窄的相对子路径") String relativeSubDir
+    ) {
+        return grepKnowledgeRepo(pattern, relativeSubDir, null);
+    }
+
+    /**
      * 在绑定的知识库子目录内对 Markdown 做正文行级与文件名检索；主 pattern 无命中时自动拆词回退。
      */
     @Tool(name = "grep_knowledge_repo", description = "在知识库 Markdown 目录中按关键词检索：匹配 .md 正文行或文件名，返回命中片段。")
     public String grepKnowledgeRepo(
             @ToolParam(description = "检索关键词或短语，对 .md 文件正文行与文件名做包含匹配（忽略大小写）") String pattern,
-            @ToolParam(description = "可选，在已配置的知识库子目录下再收窄的相对子路径") String relativeSubDir
+            @ToolParam(description = "可选，在已配置的知识库子目录下再收窄的相对子路径") String relativeSubDir,
+            ToolContext toolContext
     ) {
         log.info("grep_knowledge_repo 开始: pattern={}, relativeSubDir={}, kbRelativeSubPath={}",
                 pattern, relativeSubDir, kbRelativeSubPath);
@@ -92,6 +118,7 @@ public class KnowledgeRepoGrepTools {
         log.info("grep_knowledge_repo 扫描目录: searchRoot={}", searchRoot);
         long startMs = System.currentTimeMillis();
         List<String> blocks = new ArrayList<>();
+        LinkedHashSet<String> matchedSourceFiles = new LinkedHashSet<>();
         int fileCount = 0;
         int matchCount = 0;
         int skippedLargeFiles = 0;
@@ -128,6 +155,7 @@ public class KnowledgeRepoGrepTools {
 
                 if (filenameHit) {
                     matchCount++;
+                    matchedSourceFiles.add(relativeFile);
                     blocks.add(formatFilenameMatchBlock(relativeFile, lines));
                     if (matchCount >= MAX_MATCHES) {
                         break;
@@ -142,6 +170,7 @@ public class KnowledgeRepoGrepTools {
                     }
                     matchCount++;
                     fileHits++;
+                    matchedSourceFiles.add(relativeFile);
                     blocks.add(formatMatchBlock(relativeFile, lines, lineIndex));
                 }
                 if (fileHits > 0) {
@@ -165,8 +194,32 @@ public class KnowledgeRepoGrepTools {
                         "hitLimit={}, fileLimit={}, elapsedMs={}",
                 pattern, fileCount, matchCount, skippedLargeFiles,
                 matchCount >= MAX_MATCHES, fileCount >= MAX_FILES, elapsedMs);
+        maybePublishMatchedSourceFiles(toolContext, matchedSourceFiles);
         String header = "共 " + matchCount + " 处命中（最多展示 " + MAX_MATCHES + " 处，扫描文件上限 " + MAX_FILES + "）：\n\n";
         return header + String.join("\n\n---\n\n", blocks);
+    }
+
+    private void maybePublishMatchedSourceFiles(ToolContext toolContext, Set<String> matchedSourceFiles) {
+        if (!publishMatchedFilesAsSources || matchedSourceFiles == null || matchedSourceFiles.isEmpty()) {
+            return;
+        }
+        publishMatchedSourceFiles(toolContext, matchedSourceFiles);
+    }
+
+    protected void publishMatchedSourceFiles(ToolContext toolContext, Set<String> matchedSourceFiles) {
+        String conversationId = AgentToolContextSupport.parentConversationId(toolContext);
+        if (StringUtils.isBlank(conversationId)) {
+            log.debug("grep_knowledge_repo 跳过来源发布: conversationId 为空, files={}", matchedSourceFiles.size());
+            return;
+        }
+        String agentId = AgentToolContextSupport.stringKey(toolContext, AgentRunnableContextKeys.CONTEXT_KEY_AGENT_ID);
+        List<Document> documents = matchedSourceFiles.stream()
+                .map(sourceFile -> Document.builder()
+                        .text("")
+                        .metadata(Map.of("sourceFile", sourceFile))
+                        .build())
+                .toList();
+        RagSourcePublicationService.tryPublishFromRetriever(conversationId, agentId, documents);
     }
 
     /**

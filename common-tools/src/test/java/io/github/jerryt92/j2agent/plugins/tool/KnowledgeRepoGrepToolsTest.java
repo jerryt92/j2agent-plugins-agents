@@ -6,9 +6,13 @@ import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeRepoMetada
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.ai.chat.model.ToolContext;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +29,7 @@ class KnowledgeRepoGrepToolsTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        KnowledgeRepoMetadataService metadataService = new KnowledgeRepoMetadataService(new KnowledgeRepoProperties());
+        KnowledgeRepoMetadataService metadataService = new KnowledgeRepoMetadataService(new KnowledgeRepoProperties(), null, null);
         setRepoRootPath(metadataService, tempDir);
         tools = new KnowledgeRepoGrepTools(metadataService, "j2agent-docs");
     }
@@ -90,6 +94,68 @@ class KnowledgeRepoGrepToolsTest {
         assertTrue(result.contains("向量检索上下文"));
         assertTrue(result.contains("read_knowledge_repo_file"));
         assertFalse(result.contains("未在知识库目录中找到"));
+    }
+
+    @Test
+    void grep_defaultDoesNotPublishMatchedSources() throws Exception {
+        CapturingKnowledgeRepoGrepTools capturingTools = createCapturingTools();
+        Path docsDir = tempDir.resolve("j2agent-docs");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("guide.md"), "共享输出设备\n", StandardCharsets.UTF_8);
+
+        String result = capturingTools.grepKnowledgeRepo("共享输出设备", "");
+
+        assertTrue(result.contains("命中"));
+        assertTrue(capturingTools.publishedSourceFiles.isEmpty());
+    }
+
+    @Test
+    void grep_setterEnabledPublishesFilenameAndContentHits() throws Exception {
+        CapturingKnowledgeRepoGrepTools capturingTools = createCapturingTools();
+        capturingTools.setPublishMatchedFilesAsSources(true);
+        Path docsDir = tempDir.resolve("j2agent-docs");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("共享输出.md"), "没有正文关键词。\n", StandardCharsets.UTF_8);
+        Files.writeString(docsDir.resolve("guide.md"), "共享输出设备需认证后使用。\n", StandardCharsets.UTF_8);
+
+        String result = capturingTools.grepKnowledgeRepo("共享输出", "");
+
+        assertTrue(result.contains("共享输出.md"));
+        assertTrue(result.contains("guide.md"));
+        assertTrue(capturingTools.publishedSourceFiles.contains("j2agent-docs/共享输出.md"));
+        assertTrue(capturingTools.publishedSourceFiles.contains("j2agent-docs/guide.md"));
+    }
+
+    @Test
+    void grep_publishesSameFileOnlyOnceWhenMultipleLinesHit() throws Exception {
+        CapturingKnowledgeRepoGrepTools capturingTools = createCapturingTools();
+        capturingTools.setPublishMatchedFilesAsSources(true);
+        Path docsDir = tempDir.resolve("j2agent-docs");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("guide.md"), """
+                共享输出设备第一行。
+                共享输出设备第二行。
+                """, StandardCharsets.UTF_8);
+
+        String result = capturingTools.grepKnowledgeRepo("共享输出设备", "");
+
+        assertTrue(result.contains("命中"));
+        assertTrue(capturingTools.publishedSourceFiles.contains("j2agent-docs/guide.md"));
+        assertTrue(capturingTools.publishedSourceFiles.size() == 1);
+    }
+
+    @Test
+    void grep_enabledDoesNotPublishWhenNoMatch() throws Exception {
+        CapturingKnowledgeRepoGrepTools capturingTools = createCapturingTools();
+        capturingTools.setPublishMatchedFilesAsSources(true);
+        Path docsDir = tempDir.resolve("j2agent-docs");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("guide.md"), "普通内容。\n", StandardCharsets.UTF_8);
+
+        String result = capturingTools.grepKnowledgeRepo("zzzz-not-found-term", "");
+
+        assertTrue(result.contains("行级检索未命中"));
+        assertTrue(capturingTools.publishedSourceFiles.isEmpty());
     }
 
     @Test
@@ -170,14 +236,34 @@ class KnowledgeRepoGrepToolsTest {
     }
 
     private KnowledgeRepoGrepTools createToolsWithImageRewriter() throws Exception {
-        KnowledgeRepoMetadataService metadataService = new KnowledgeRepoMetadataService(new KnowledgeRepoProperties());
+        KnowledgeRepoMetadataService metadataService = new KnowledgeRepoMetadataService(new KnowledgeRepoProperties(), null, null);
         setRepoRootPath(metadataService, tempDir);
         return new KnowledgeRepoGrepTools(metadataService, "j2agent-docs", new KnowledgeMarkdownImageRewriter());
+    }
+
+    private CapturingKnowledgeRepoGrepTools createCapturingTools() throws Exception {
+        KnowledgeRepoMetadataService metadataService = new KnowledgeRepoMetadataService(new KnowledgeRepoProperties(), null, null);
+        setRepoRootPath(metadataService, tempDir);
+        return new CapturingKnowledgeRepoGrepTools(metadataService);
     }
 
     private static void setRepoRootPath(KnowledgeRepoMetadataService metadataService, Path root) throws Exception {
         Field field = KnowledgeRepoMetadataService.class.getDeclaredField("repoRootPath");
         field.setAccessible(true);
         field.set(metadataService, root);
+    }
+
+    private static final class CapturingKnowledgeRepoGrepTools extends KnowledgeRepoGrepTools {
+
+        final List<String> publishedSourceFiles = new ArrayList<>();
+
+        CapturingKnowledgeRepoGrepTools(KnowledgeRepoMetadataService metadataService) {
+            super(metadataService, "j2agent-docs");
+        }
+
+        @Override
+        protected void publishMatchedSourceFiles(ToolContext toolContext, Set<String> matchedSourceFiles) {
+            publishedSourceFiles.addAll(matchedSourceFiles);
+        }
     }
 }
