@@ -8,6 +8,7 @@ import io.github.jerryt92.j2agent.service.llm.agent.inf.feature.ExternalSkills;
 import io.github.jerryt92.j2agent.service.rag.inf.AbstractCollectionKbRetriever;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeMarkdownImageRewriter;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeRepoMetadataService;
+import io.github.jerryt92.j2agent.service.security.ResourceAccessService;
 import io.github.jerryt92.j2agent.tools.MathTool;
 import io.github.jerryt92.j2agent.tools.WebTool;
 import lombok.extern.slf4j.Slf4j;
@@ -95,7 +96,8 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
             @Qualifier("j2AgentDocsRetriever") AbstractCollectionKbRetriever j2AgentDocsRetriever,
             WebTool webTool,
             KnowledgeRepoMetadataService knowledgeRepoMetadataService,
-            KnowledgeMarkdownImageRewriter knowledgeMarkdownImageRewriter) {
+            KnowledgeMarkdownImageRewriter knowledgeMarkdownImageRewriter,
+            ResourceAccessService resourceAccess) {
         this.mathTool = mathTool;
         this.j2AgentDocsRetriever = j2AgentDocsRetriever;
         this.webTool = webTool;
@@ -105,6 +107,7 @@ public class AssistantReactAgent extends AiAgent implements ExternalSkills {
         this.knowledgeRepoGrepTools = new KnowledgeRepoGrepTools(
                 knowledgeRepoMetadataService, "j2agent-docs", knowledgeMarkdownImageRewriter);
         this.knowledgeRepoGrepTools.setPublishMatchedFilesAsSources(true);
+        this.knowledgeRepoGrepTools.setResourceAccess(resourceAccess);
     }
 
     @Override
