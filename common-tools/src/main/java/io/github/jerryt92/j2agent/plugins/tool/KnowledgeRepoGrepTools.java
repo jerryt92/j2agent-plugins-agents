@@ -1,16 +1,20 @@
 package io.github.jerryt92.j2agent.plugins.tool;
 
+import io.github.jerryt92.j2agent.model.security.UserContextBo;
 import io.github.jerryt92.j2agent.service.llm.agent.builtin.AgentToolContextSupport;
 import io.github.jerryt92.j2agent.service.llm.agent.core.AgentRunnableContextKeys;
 import io.github.jerryt92.j2agent.service.rag.RagSourcePublicationService;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeMarkdownImageRewriter;
 import io.github.jerryt92.j2agent.service.rag.knowledge.repo.KnowledgeRepoMetadataService;
+import io.github.jerryt92.j2agent.service.security.ResourceAccessService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -45,6 +49,7 @@ public class KnowledgeRepoGrepTools {
     private final String kbRelativeSubPath;
     private final KnowledgeMarkdownImageRewriter imageRewriter;
     private boolean publishMatchedFilesAsSources;
+    private ResourceAccessService resourceAccess;
 
     /**
      * @param metadataService   平台知识库元数据服务（提供 repo 根路径）
@@ -72,6 +77,12 @@ public class KnowledgeRepoGrepTools {
         return this;
     }
 
+    /** 注入知识库权限服务；未注入时拒绝检索。 */
+    public KnowledgeRepoGrepTools setResourceAccess(ResourceAccessService access) {
+        this.resourceAccess = access;
+        return this;
+    }
+
     /**
      * 在绑定的知识库子目录内对 Markdown 做正文行级与文件名检索；主 pattern 无命中时自动拆词回退。
      */
@@ -96,6 +107,10 @@ public class KnowledgeRepoGrepTools {
         if (StringUtils.isBlank(pattern)) {
             log.warn("grep_knowledge_repo 参数无效: pattern 为空");
             return "检索关键词不能为空，请提供 pattern。";
+        }
+        String denied = denyUnlessReadable(toolContext);
+        if (denied != null) {
+            return denied;
         }
         Path normalizedRoot = resolveRepoRoot();
         if (normalizedRoot == null) {
@@ -228,11 +243,16 @@ public class KnowledgeRepoGrepTools {
     @Tool(name = "read_knowledge_repo_file", description = "按相对知识库根的路径读取 Markdown 原文；grep 未命中且参考上下文含【来源文件】时使用。")
     public String readKnowledgeRepoFile(
             @ToolParam(description = "相对知识库根的文件路径，如 j2agent-docs/xxx/文档.md（与【来源文件】一致）") String relativeFilePath,
-            @ToolParam(description = "可选，返回的最大字符数，默认 32000") Integer maxChars
+            @ToolParam(description = "可选，返回的最大字符数，默认 32000") Integer maxChars,
+            ToolContext toolContext
     ) {
         log.info("read_knowledge_repo_file 开始: relativeFilePath={}, maxChars={}", relativeFilePath, maxChars);
         if (StringUtils.isBlank(relativeFilePath)) {
             return "文件路径不能为空，请提供 relativeFilePath。";
+        }
+        String denied = denyUnlessReadable(toolContext);
+        if (denied != null) {
+            return denied;
         }
         Path normalizedRoot = resolveRepoRoot();
         if (normalizedRoot == null) {
@@ -242,6 +262,11 @@ public class KnowledgeRepoGrepTools {
         if (resolvedFile == null) {
             log.warn("read_knowledge_repo_file 路径无效或越界: relativeFilePath={}", relativeFilePath);
             return "文件路径无效或越界，请检查 relativeFilePath（须为 .md 文件且位于已配置的知识库子目录下）。";
+        }
+        String relative = normalizedRoot.relativize(resolvedFile).toString().replace('\\', '/');
+        String sourceDenied = denyUnlessSourceReadable(toolContext, relative);
+        if (sourceDenied != null) {
+            return sourceDenied;
         }
         if (!Files.exists(resolvedFile) || !Files.isRegularFile(resolvedFile)) {
             log.warn("read_knowledge_repo_file 文件不存在: path={}", resolvedFile);
@@ -254,7 +279,6 @@ public class KnowledgeRepoGrepTools {
             }
             String content = Files.readString(resolvedFile, StandardCharsets.UTF_8);
             int limit = maxChars == null || maxChars <= 0 ? DEFAULT_READ_MAX_CHARS : maxChars;
-            String relative = normalizedRoot.relativize(resolvedFile).toString().replace('\\', '/');
             content = rewriteOutputMarkdown(relative, content);
             if (content.length() <= limit) {
                 return "**文件**: `" + relative + "`\n\n```markdown\n" + content + "\n```";
@@ -265,6 +289,49 @@ public class KnowledgeRepoGrepTools {
         } catch (IOException e) {
             log.warn("read_knowledge_repo_file 读取失败: path={}", resolvedFile, e);
             return "读取文件失败: " + e.getMessage();
+        }
+    }
+
+    /** 无知识库读权限时拒绝 grep/read，不扫描磁盘。 */
+    private String denyUnlessReadable(ToolContext toolContext) {
+        if (resourceAccess == null) {
+            return "无权访问该知识库。";
+        }
+        UserContextBo user = AgentToolContextSupport.resolveTurnUser(toolContext);
+        if (user == null) {
+            return "无权访问该知识库。";
+        }
+        String repoCode = StringUtils.trimToNull(kbRelativeSubPath);
+        if (repoCode == null || repoCode.contains("..") || repoCode.contains("/")) {
+            return "无权访问该知识库。";
+        }
+        try {
+            resourceAccess.requireRepository(user, repoCode, 2);
+            return null;
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode() == HttpStatus.FORBIDDEN
+                    || exception.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                return "无权访问该知识库。";
+            }
+            throw exception;
+        }
+    }
+
+    /** 按文件相对路径再校验仓库读权限，通过返回 null。 */
+    private String denyUnlessSourceReadable(ToolContext toolContext, String relativeSource) {
+        String denied = denyUnlessReadable(toolContext);
+        if (denied != null) {
+            return denied;
+        }
+        try {
+            resourceAccess.requireSource(AgentToolContextSupport.resolveTurnUser(toolContext), relativeSource);
+            return null;
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode() == HttpStatus.FORBIDDEN
+                    || exception.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                return "无权访问该知识库。";
+            }
+            throw exception;
         }
     }
 
